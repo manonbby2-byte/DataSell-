@@ -11,24 +11,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
+      # 1. Checkout repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Java 17 (required for Android SDK & Gradle)
+      # 2. Setup Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # 3️⃣ Install system dependencies
-      - name: Install System Dependencies
+      # 3. Install system dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip imagemagick
 
-      # 4️⃣ Setup Android SDK
+      # 4. Setup Android SDK
       - name: Setup Android SDK
         run: |
           mkdir -p $HOME/android-sdk
@@ -41,48 +41,45 @@ jobs:
           mkdir -p $HOME/.android
           touch $HOME/.android/repositories.cfg
 
-      # 5️⃣ Accept Android licenses
+      # 5. Accept SDK licenses
       - name: Accept Licenses
         run: |
-          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
+          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk --licenses
 
-      # 6️⃣ Install required SDK components including both build-tools 32.0.0 & 33.0.2
-      - name: Install Android SDK Components
+      # 6. Install SDK components
+      - name: Install SDK Components
         run: |
-          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager \
+          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk \
             "platform-tools" \
-            "build-tools;32.0.0" \
-            "build-tools;33.0.2" \
             "platforms;android-32" \
-            "platforms;android-33"
+            "platforms;android-33" \
+            "build-tools;32.0.0" \
+            "build-tools;33.0.2"
 
-      # 7️⃣ Export Android environment variables
+      # 7. Set environment variables
       - name: Export Android Paths
         run: |
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/build-tools/32.0.0" >> $GITHUB_PATH
           echo "$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_PATH
 
-      # 8️⃣ Setup Node.js
+      # 8. Setup Node.js
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 18
 
-      # 9️⃣ Install Cordova globally
+      # 9. Install Cordova globally
       - name: Install Cordova
-        run: |
-          npm install -g cordova
-          cordova --version
+        run: npm install -g cordova@latest
 
-      # 🔟 Install project dependencies
+      # 10. Install project dependencies
       - name: Install Project Dependencies
         working-directory: ./android-wrapper
-        run: npm ci || npm install
+        run: npm install
 
-      # 1️⃣1️⃣ Prepare web assets (copy public → www + generate icons)
+      # 11. Prepare web assets + generate icons
       - name: Prepare Web Assets
         working-directory: ./android-wrapper
         run: |
@@ -95,32 +92,33 @@ jobs:
             convert ../public/images/web-logo2.png -resize 48x48 www/images/web-logo2-48.png
             convert ../public/images/web-logo2.png -resize 72x72 www/images/web-logo2-72.png
             convert ../public/images/web-logo2.png -resize 96x96 www/images/web-logo2-96.png
-            convert ../public/images/web-logo2.png -resize 144x144 www/images/web-logo2-144.png
-            convert ../public/images/web-logo2.png -resize 192x192 www/images/web-logo2-192.png
-            convert ../public/images/web-logo2.png -resize 192x192 www/images/icon.png
           else
-            echo "WARNING: Logo not found at ../public/images/web-logo2.png"
+            echo "ERROR: Logo not found at public/images/web-logo2.png"
           fi
 
-      # 1️⃣2️⃣ Add Android platform
+      # 12. Add Android platform (Cordova Android 11)
       - name: Add Android Platform
         working-directory: ./android-wrapper
         run: |
           rm -rf platforms/android || true
           cordova platform add android@11.0.0
-          cordova requirements android
 
-      # 1️⃣3️⃣ Build the APK
+      # 13. Force Gradle 7.5.1 for Cordova
+      - name: Force Gradle 7.5.1
+        working-directory: ./android-wrapper/platforms/android
+        run: ./gradlew wrapper --gradle-version 7.5.1
+
+      # 14. Build debug APK
       - name: Build APK
         working-directory: ./android-wrapper
         run: |
-          cordova build android --debug --verbose
+          cordova build android --debug --no-telemetry
           ls -R platforms/android/app/build/outputs/apk/
 
-      # 1️⃣4️⃣ Upload APK artifact
+      # 15. Upload APK artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
           path: android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+          retention-days: 5
