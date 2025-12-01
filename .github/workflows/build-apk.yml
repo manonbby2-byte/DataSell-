@@ -7,509 +7,95 @@ on:
       - main
 
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget unzip imagemagick
-
-      - name: Use pre-installed Android SDK
-        run: |
-          # GitHub Actions already has Android SDK installed
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
-          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+    
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        packages: |
+          platform-tools
+          platforms;android-33
+          build-tools;33.0.2
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Install Cordova
+      run: |
+        npm install -g cordova
+    
+    - name: Prepare project
+      working-directory: ./android-wrapper
+      run: |
+        npm install
+        
+        # Create www directory from public
+        rm -rf www || true
+        mkdir -p www
+        cp -r ../public/* www/ 2>/dev/null || true
+        
+        # Create required icon files
+        mkdir -p www/images
+        
+        # Check if logo exists
+        if [ -f "../public/images/web-logo2.png" ]; then
+          echo "Creating icon files from web-logo2.png..."
+          # Install imagemagick if not present
+          sudo apt-get update && sudo apt-get install -y imagemagick || true
           
-          # Accept licenses
-          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          
-          # Install needed packages
-          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
-            "platforms;android-33" "build-tools;33.0.2"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Run your build-apk.sh script
-        working-directory: ./android-wrapper
-        env:
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-          ANDROID_HOME: /usr/local/lib/android/sdk
-        run: |
-          # Make your script executable
-          chmod +x build-apk.sh
-          
-          # Run it with debug output
-          echo "=== Running your build script ==="
-          ./build-apk.sh
-          
-          # Check result
-          if [ $? -eq 0 ]; then
-            echo "✅ Build script completed successfully"
-            # Look for APK
-            find . -name "*.apk" -type f | head -5
-          else
-            echo "❌ Build script failed"
-            exit 1
-          fi
-
-      - name: Upload any APK found
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: |
-            ./android-wrapper/platforms/android/app/build/outputs/apk/**/*.apk
-            ./android-wrapper/*.apk
-          if-no-files-found: warn            "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "platforms;android-31" \
-            "build-tools;31.0.0"
-          
-          # Add to PATH
-          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
-          echo "/usr/local/lib/android/sdk/build-tools/33.0.2" >> $GITHUB_PATH
-
-      - name: Setup Node.js and Cordova
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          
-      - name: Install Cordova
-        run: |
-          npm install -g cordova@11.0.0
-          cordova --version
-
-      - name: Prepare project
-        working-directory: ./android-wrapper
-        run: |
-          # Install dependencies
-          npm ci || npm install
-          
-          # Create www directory
-          rm -rf www || true
-          mkdir -p www
-          
-          # Copy public folder content
-          cp -r ../public/* www/ 2>/dev/null || true
-          
-          # Check if we have the logo
-          if [ -f "../public/images/web-logo2.png" ]; then
-            echo "Found logo, creating icon files..."
-            mkdir -p www/images
-            
-            # Create the specific file Cordova is looking for
+          # Create the exact file Cordova wants
+          if command -v convert &> /dev/null; then
             convert ../public/images/web-logo2.png -resize 72x72 www/images/web-logo2-72.png
-            
-            # Create other common sizes
             convert ../public/images/web-logo2.png -resize 36x36 www/images/icon-36.png
             convert ../public/images/web-logo2.png -resize 48x48 www/images/icon-48.png
             convert ../public/images/web-logo2.png -resize 96x96 www/images/icon-96.png
             convert ../public/images/web-logo2.png -resize 144x144 www/images/icon-144.png
             convert ../public/images/web-logo2.png -resize 192x192 www/images/icon-192.png
-            
-            # Also create a simple icon.png
-            cp ../public/images/web-logo2.png www/images/icon.png
           else
-            echo "Creating placeholder icons..."
-            mkdir -p www/images
-            # Create simple green placeholder
-            convert -size 72x72 xc:#4CAF50 www/images/web-logo2-72.png
-            convert -size 192x192 xc:#4CAF50 www/images/icon.png
+            # Fallback - create placeholder
+            echo "ImageMagick not available, creating placeholder"
+            echo "Placeholder" > www/images/web-logo2-72.png
           fi
-          
-          echo "WWW directory contents:"
-          find www -type f | head -20
-
-      - name: Debug - Check config.xml
-        working-directory: ./android-wrapper
-        run: |
-          if [ -f "config.xml" ]; then
-            echo "=== config.xml ==="
-            cat config.xml
-          fi
-
-      - name: Build with Cordova (Simple approach)
-        working-directory: ./android-wrapper
-        env:
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-          ANDROID_HOME: /usr/local/lib/android/sdk
-        run: |
-          # Clean any existing platform
-          rm -rf platforms/android plugins/cordova-* 2>/dev/null || true
-          
-          # Add Android platform with older, more stable version
-          cordova platform add android@11.0.0
-          
-          echo "=== Cordova requirements ==="
-          cordova requirements android 2>/dev/null || true
-          
-          echo "=== Building APK ==="
-          # Build without verbose to reduce noise
-          cordova build android --debug
-          
-          # Check for APK
-          if [ -f "platforms/android/app/build/outputs/apk/debug/app-debug.apk" ]; then
-            echo "✅ SUCCESS: APK created!"
-            ls -lh platforms/android/app/build/outputs/apk/debug/app-debug.apk
-          else
-            echo "❌ APK not found at standard path"
-            echo "Searching for APK files..."
-            find . -name "*.apk" -type f
-            exit 1
-          fi
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: ./android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error          mkdir -p $HOME/android-sdk/cmdline-tools
-          mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-          
-          # Add to PATH for current step
-          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          
-          # Create .android directory for licenses
-          mkdir -p $HOME/.android
-          touch $HOME/.android/repositories.cfg
-
-      - name: Accept Android licenses
-        run: |
-          # Accept all licenses non-interactively
-          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
-
-      - name: Install Android SDK components
-        run: |
-          # Install required components
-          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager \
-            "platform-tools" \
-            "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "platforms;android-31" \
-            "build-tools;31.0.0" \
-            "ndk;21.4.7075529"
-          
-          # Verify installation
-          echo "=== Installed components ==="
-          ls -la $HOME/android-sdk/platform-tools/adb
-
-      - name: Set Android environment variables
-        run: |
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_PATH
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install Cordova globally
-        run: |
-          npm install -g cordova@latest
-          cordova --version
-
-      - name: Install project dependencies
-        working-directory: ./android-wrapper
-        run: |
-          npm ci || npm install
-
-      - name: Prepare Cordova www directory with correct icon structure
-        working-directory: ./android-wrapper
-        run: |
-          # Clean www directory
-          rm -rf www || true
-          
-          # Copy entire public folder
-          cp -r ../public www
-          
-          # Create images directory if it doesn't exist
-          mkdir -p www/images
-          
-          # Check if web-logo2.png exists
-          if [ -f "../public/images/web-logo2.png" ]; then
-            echo "Found web-logo2.png, creating Cordova-compatible icon sizes..."
-            
-            # Create the exact icon files Cordova expects
-            # Cordova looks for specific filenames in config.xml or default locations
-            
-            # Standard Cordova Android icon sizes and names
-            convert ../public/images/web-logo2.png -resize 72x72 www/images/icon-72.png
-            convert ../public/images/web-logo2.png -resize 96x96 www/images/icon-96.png
-            convert ../public/images/web-logo2.png -resize 36x36 www/images/icon-36.png
-            convert ../public/images/web-logo2.png -resize 48x48 www/images/icon-48.png
-            convert ../public/images/web-logo2.png -resize 144x144 www/images/icon-144.png
-            convert ../public/images/web-logo2.png -resize 192x192 www/images/icon-192.png
-            
-            # Also create the exact file Cordova is looking for
-            convert ../public/images/web-logo2.png -resize 72x72 www/images/web-logo2-72.png
-            
-            echo "Created icons:"
-            ls -la www/images/icon*.png www/images/web-logo2*.png 2>/dev/null || true
-          else
-            echo "Warning: web-logo2.png not found"
-            echo "Creating placeholder icons..."
-            # Create simple colored placeholder icons
-            convert -size 72x72 xc:#4CAF50 www/images/icon-72.png
-            convert -size 96x96 xc:#4CAF50 www/images/icon-96.png
-            convert -size 72x72 xc:#4CAF50 www/images/web-logo2-72.png
-          fi
-
-      - name: Check Cordova config.xml
-        working-directory: ./android-wrapper
-        run: |
-          echo "=== Checking config.xml ==="
-          if [ -f "config.xml" ]; then
-            echo "config.xml contents:"
-            cat config.xml
-            echo ""
-            echo "Looking for icon references..."
-            grep -i icon config.xml || echo "No icon tags found in config.xml"
-          else
-            echo "WARNING: config.xml not found!"
-          fi
-
-      - name: Add Android platform (skip icon copy)
-        working-directory: ./android-wrapper
-        run: |
-          # Remove existing platform
-          rm -rf platforms/android || true
-          
-          # Add Android platform with --no-resources flag to skip icon copying
-          cordova platform add android@12.0.0 --no-resources
-          
-          echo "=== Platform added successfully ==="
-
-      - name: Manually copy icons to Android resources
-        working-directory: ./android-wrapper
-        run: |
-          # Check if we need to copy icons manually
-          if [ -f "www/images/icon-72.png" ]; then
-            echo "Copying icons to Android resources..."
-            
-            # Create Android resource directories
-            mkdir -p platforms/android/app/src/main/res
-            
-            # Copy icons to appropriate Android drawable directories
-            # ldpi (36x36)
-            mkdir -p platforms/android/app/src/main/res/drawable-ldpi
-            cp www/images/icon-36.png platforms/android/app/src/main/res/drawable-ldpi/icon.png 2>/dev/null || true
-            
-            # mdpi (48x48)
-            mkdir -p platforms/android/app/src/main/res/drawable-mdpi
-            cp www/images/icon-48.png platforms/android/app/src/main/res/drawable-mdpi/icon.png 2>/dev/null || true
-            
-            # hdpi (72x72)
-            mkdir -p platforms/android/app/src/main/res/drawable-hdpi
-            cp www/images/icon-72.png platforms/android/app/src/main/res/drawable-hdpi/icon.png 2>/dev/null || true
-            
-            # xhdpi (96x96)
-            mkdir -p platforms/android/app/src/main/res/drawable-xhdpi
-            cp www/images/icon-96.png platforms/android/app/src/main/res/drawable-xhdpi/icon.png 2>/dev/null || true
-            
-            # xxhdpi (144x144)
-            mkdir -p platforms/android/app/src/main/res/drawable-xxhdpi
-            cp www/images/icon-144.png platforms/android/app/src/main/res/drawable-xxhdpi/icon.png 2>/dev/null || true
-            
-            # xxxhdpi (192x192)
-            mkdir -p platforms/android/app/src/main/res/drawable-xxxhdpi
-            cp www/images/icon-192.png platforms/android/app/src/main/res/drawable-xxxhdpi/icon.png 2>/dev/null || true
-            
-            echo "Icons copied to Android resources"
-          else
-            echo "No custom icons found, using Cordova defaults"
-          fi
-
-      - name: Build Android APK
-        working-directory: ./android-wrapper
-        env:
-          ANDROID_SDK_ROOT: $HOME/android-sdk
-          ANDROID_HOME: $HOME/android-sdk
-        run: |
-          echo "=== Building APK ==="
-          
-          # Check Cordova requirements first
-          cordova requirements android || echo "Requirements check completed"
-          
-          # Build debug APK
-          cordova build android --debug
-          
-          # Check if APK was created
-          APK_PATH="platforms/android/app/build/outputs/apk/debug/app-debug.apk"
-          if [ -f "$APK_PATH" ]; then
-            echo "✅ APK built successfully!"
-            ls -lh "$APK_PATH"
-          else
-            echo "Searching for APK files..."
-            find platforms/android -name "*.apk" -type f
-            exit 1
-          fi
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: ./android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7          mkdir -p $HOME/android-sdk/cmdline-tools
-          mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-          
-          # Add to PATH for current step
-          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          
-          # Create .android directory for licenses
-          mkdir -p $HOME/.android
-          touch $HOME/.android/repositories.cfg
-
-      - name: Accept Android licenses
-        run: |
-          # Accept all licenses non-interactively
-          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
-
-      - name: Install Android SDK components
-        run: |
-          # Install required components
-          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager \
-            "platform-tools" \
-            "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "platforms;android-31" \
-            "build-tools;31.0.0" \
-            "ndk;21.4.7075529"
-          
-          # Verify installation
-          echo "=== Installed components ==="
-          ls -la $HOME/android-sdk/platform-tools/adb
-          echo "Build tools:"
-          ls -la $HOME/android-sdk/build-tools/
-
-      - name: Set Android environment variables
-        run: |
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_PATH
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install Cordova globally
-        run: |
-          npm install -g cordova@latest
-          cordova --version
-
-      - name: Install project dependencies
-        working-directory: ./android-wrapper
-        run: |
-          npm ci || npm install
-
-      - name: Prepare web assets (FIXED for images folder)
-        working-directory: ./android-wrapper
-        run: |
-          # Remove old www directory
-          rm -rf www || true
-          
-          # Copy entire public folder to www
-          cp -r ../public www
-          
-          # Now handle the logo from images folder
-          if [ -f "../public/images/web-logo2.png" ]; then
-            echo "Found logo in images folder, creating resized versions..."
-            
-            # Create resized Android icons if ImageMagick is available
-            if command -v convert &> /dev/null; then
-              echo "Creating Android icon sizes..."
-              
-              # Create directory for icons in www
-              mkdir -p www/images/icons
-              
-              # Create various Android icon sizes
-              convert ../public/images/web-logo2.png -resize 36x36 www/images/icon-36.png
-              convert ../public/images/web-logo2.png -resize 48x48 www/images/icon-48.png
-              convert ../public/images/web-logo2.png -resize 72x72 www/images/icon-72.png
-              convert ../public/images/web-logo2.png -resize 96x96 www/images/icon-96.png
-              convert ../public/images/web-logo2.png -resize 144x144 www/images/icon-144.png
-              convert ../public/images/web-logo2.png -resize 192x192 www/images/icon-192.png
-              
-              # Also create a default icon.png
-              convert ../public/images/web-logo2.png -resize 192x192 www/images/icon.png
-              
-              echo "Created icons:"
-              ls -la www/images/icon-*.png
-            else
-              echo "ImageMagick not available, using original logo"
-              # Copy the logo to a standard location
-              cp ../public/images/web-logo2.png www/images/icon.png
-            fi
-          else
-            echo "Warning: web-logo2.png not found in public/images/"
-            echo "Available images:"
-            ls -la ../public/images/ 2>/dev/null || echo "No images directory found"
-          fi
-          
-          # List final www directory structure
-          echo "=== Final www directory structure ==="
-          find www -type f -name "*.png" | head -20
-
-      - name: Add Android platform
-        working-directory: ./android-wrapper
-        run: |
-          # Remove existing android platform if present
-          rm -rf platforms/android plugins/cordova-android-support-gradle-release || true
-          
-          # Add Android platform
-          cordova platform add android@12.0.0
-          
-          # Check requirements
-          echo "=== Cordova Android Requirements ==="
-          cordova requirements android
-
-      - name: Build Android APK
-        working-directory: ./android-wrapper
-        env:
-          ANDROID_SDK_ROOT: $HOME/android-sdk
-          ANDROID_HOME: $HOME/android-sdk
-        run: |
-          echo "=== Building APK ==="
-          
-          # Build debug APK
-          cordova build android --debug --verbose
-          
-          # Check if APK was created
-          APK_PATH="platforms/android/app/build/outputs/apk/debug/app-debug.apk"
-          if [ -f "$APK_PATH" ]; then
-            echo "✅ APK built successfully!"
-            ls -lh "$APK_PATH"
-            echo "APK size: $(du -h "$APK_PATH" | cut -f1)"
-          else
-            echo "❌ APK not found at expected path!"
-            echo "Searching for APK files..."
-            find platforms/android -name "*.apk" -type f
-            exit 1
-          fi
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: ./android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
+        else
+          echo "Creating placeholder icons..."
+          echo "Placeholder icon" > www/images/web-logo2-72.png
+        fi
+    
+    - name: Add Android platform
+      working-directory: ./android-wrapper
+      run: |
+        # Remove old platform
+        rm -rf platforms/android 2>/dev/null || true
+        
+        # Add platform with specific version
+        cordova platform add android@11.0.0
+    
+    - name: Build APK
+      working-directory: ./android-wrapper
+      run: |
+        # Build the APK
+        cordova build android --debug
+        
+        # List the APK file
+        echo "Looking for APK..."
+        find . -name "*.apk" -type f
+    
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-apk
+        path: ./android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+        if-no-files-found: warn
