@@ -8,33 +8,72 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
-    - name: Setup environment
+    - name: Install Java
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+    
+    - name: Install basic tools
       run: |
-        # Install basic tools
         sudo apt-get update
-        sudo apt-get install -y nodejs npm openjdk-17-jdk
-        
-        # Install Cordova
-        sudo npm install -g cordova@11.0.0
-        
-        # Install Android SDK using sdkmanager
-        mkdir -p ~/android-sdk
-        cd ~/android-sdk
-        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip commandlinetools-linux-9477386_latest.zip
-        mkdir -p cmdline-tools/latest
-        mv cmdline-tools/* cmdline-tools/latest/
-        
-        # Set environment
-        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
+        sudo apt-get install -y nodejs npm
     
+    - name: Install Cordova
+      run: |
+        sudo npm install -g cordova@10.0.0
+    
+    - name: Use GitHub's pre-installed Android
+      run: |
+        echo "Using pre-installed Android SDK"
+        echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+        echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+        echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
+        echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+    
+    - name: Prepare project
+      working-directory: ./android-wrapper
+      run: |
+        # Install dependencies
+        npm install || npm ci
+        
+        # Create www from public
+        rm -rf www
+        mkdir -p www
+        cp -r ../public/* www/ || true
+        
+        # Create dummy icon file to avoid errors
+        mkdir -p www/images
+        echo "dummy" > www/images/web-logo2-72.png
+        echo "dummy" > www/images/icon.png
+    
+    - name: Build APK
+      working-directory: ./android-wrapper
+      run: |
+        # Remove old platform
+        rm -rf platforms/android 2>/dev/null || true
+        
+        # Add Android platform
+        cordova platform add android@10.1.1
+        
+        # Build
+        cordova build android --debug
+        
+        # Find APK
+        find . -name "*.apk" -type f
+    
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-apk
+        path: ./android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+        if-no-files-found: warn    
     - name: Accept licenses and install Android
       run: |
         yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
