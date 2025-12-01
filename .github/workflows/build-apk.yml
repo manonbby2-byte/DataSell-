@@ -25,16 +25,72 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget unzip
 
-      - name: Install Android SDK cmdline tools
-        run: |
-          mkdir -p $HOME/android-sdk
-          cd /tmp
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          unzip -q commandlinetools-linux-9477386_latest.zip
-          mkdir -p $HOME/android-sdk/cmdline-tools
-          mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-          rm commandlinetools-linux-9477386_latest.zip
+      - name: Setup Android SDK (Official Action - RECOMMENDED)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-33
+            build-tools;33.0.2
+            platforms;android-31
+            build-tools;31.0.0
+            ndk;21.4.7075529
+          accept-licenses: true
 
+      - name: Verify Android SDK installation
+        run: |
+          echo "Android SDK path: $ANDROID_SDK_ROOT"
+          ls -la $ANDROID_SDK_ROOT/platform-tools/adb
+          ls -la $ANDROID_SDK_ROOT/build-tools/
+          ls -la $ANDROID_SDK_ROOT/platforms/
+
+      - name: Install Node.js and Cordova
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install Cordova CLI globally
+        run: |
+          npm install -g cordova
+          cordova --version
+
+      - name: Install project dependencies
+        working-directory: ./android-wrapper
+        run: |
+          npm ci || npm install
+
+      - name: Copy public into wrapper
+        working-directory: ./android-wrapper
+        run: |
+          rm -rf www || true
+          cp -r ../public ./www
+
+      - name: Build APK (Cordova)
+        working-directory: ./android-wrapper
+        env:
+          ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT
+          ANDROID_HOME: $ANDROID_SDK_ROOT
+        run: |
+          # List contents to debug
+          echo "Current directory: $(pwd)"
+          ls -la
+          
+          # Check if build-apk.sh exists
+          if [ -f "build-apk.sh" ]; then
+            chmod +x build-apk.sh
+            ./build-apk.sh
+          else
+            echo "build-apk.sh not found, attempting direct Cordova build..."
+            # If no build script, try direct commands
+            cordova platform add android
+            cordova build android --debug
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: datasell-debug-apk
+          path: android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
       - name: Accept licenses and install SDK components
         run: |
           # Set environment variables for this step
