@@ -41,22 +41,20 @@ jobs:
           mkdir -p $HOME/.android
           touch $HOME/.android/repositories.cfg
 
-      # 5. Accept SDK licenses
+      # 5. Accept Android licenses
       - name: Accept Licenses
         run: |
-          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk --licenses
+          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
 
       # 6. Install SDK components
-      - name: Install SDK Components
+      - name: Install Android SDK Components
         run: |
-          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk \
+          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager \
             "platform-tools" \
-            "platforms;android-32" \
             "platforms;android-33" \
-            "build-tools;32.0.0" \
             "build-tools;33.0.2"
 
-      # 7. Set environment variables
+      # 7. Set Android environment variables
       - name: Export Android Paths
         run: |
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
@@ -72,14 +70,14 @@ jobs:
 
       # 9. Install Cordova globally
       - name: Install Cordova
-        run: npm install -g cordova@latest
+        run: npm install -g cordova
 
       # 10. Install project dependencies
       - name: Install Project Dependencies
         working-directory: ./android-wrapper
         run: npm install
 
-      # 11. Prepare web assets + generate icons
+      # 11. Prepare www folder and generate icons
       - name: Prepare Web Assets
         working-directory: ./android-wrapper
         run: |
@@ -87,7 +85,6 @@ jobs:
           cp -r ../public www
           mkdir -p www/images
           if [ -f "../public/images/web-logo2.png" ]; then
-            echo "Generating Android icons..."
             convert ../public/images/web-logo2.png -resize 36x36 www/images/web-logo2-36.png
             convert ../public/images/web-logo2.png -resize 48x48 www/images/web-logo2-48.png
             convert ../public/images/web-logo2.png -resize 72x72 www/images/web-logo2-72.png
@@ -96,17 +93,21 @@ jobs:
             echo "ERROR: Logo not found at public/images/web-logo2.png"
           fi
 
-      # 12. Add Android platform (Cordova Android 11)
+      # 12. Add Android platform
       - name: Add Android Platform
         working-directory: ./android-wrapper
         run: |
           rm -rf platforms/android || true
           cordova platform add android@11.0.0
 
-      # 13. Force Gradle 7.5.1 for Cordova
+      # 13. Force Gradle 7.5.1
       - name: Force Gradle 7.5.1
         working-directory: ./android-wrapper/platforms/android
-        run: ./gradlew wrapper --gradle-version 7.5.1
+        run: |
+          GRADLE_WRAPPER="gradle/wrapper/gradle-wrapper.properties"
+          if [ -f "$GRADLE_WRAPPER" ]; then
+            sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-7.5.1-all.zip|' $GRADLE_WRAPPER
+          fi
 
       # 14. Build debug APK
       - name: Build APK
