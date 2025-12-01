@@ -14,7 +14,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java (JDK 17 required for Android SDK)
+      - name: Setup Java (JDK 17)
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -25,16 +25,119 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget unzip imagemagick
 
-      - name: Setup Android SDK
+      - name: Setup Android SDK (Simple method)
         run: |
-          # Create Android SDK directory
-          mkdir -p $HOME/android-sdk
+          # Use pre-installed Android SDK on GitHub Actions
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
           
-          # Download and extract command line tools
-          cd /tmp
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip
-          mkdir -p $HOME/android-sdk/cmdline-tools
+          # Install required SDK components
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+            "platform-tools" \
+            "platforms;android-33" \
+            "build-tools;33.0.2" \
+            "platforms;android-31" \
+            "build-tools;31.0.0"
+          
+          # Add to PATH
+          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
+          echo "/usr/local/lib/android/sdk/build-tools/33.0.2" >> $GITHUB_PATH
+
+      - name: Setup Node.js and Cordova
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install Cordova
+        run: |
+          npm install -g cordova@11.0.0
+          cordova --version
+
+      - name: Prepare project
+        working-directory: ./android-wrapper
+        run: |
+          # Install dependencies
+          npm ci || npm install
+          
+          # Create www directory
+          rm -rf www || true
+          mkdir -p www
+          
+          # Copy public folder content
+          cp -r ../public/* www/ 2>/dev/null || true
+          
+          # Check if we have the logo
+          if [ -f "../public/images/web-logo2.png" ]; then
+            echo "Found logo, creating icon files..."
+            mkdir -p www/images
+            
+            # Create the specific file Cordova is looking for
+            convert ../public/images/web-logo2.png -resize 72x72 www/images/web-logo2-72.png
+            
+            # Create other common sizes
+            convert ../public/images/web-logo2.png -resize 36x36 www/images/icon-36.png
+            convert ../public/images/web-logo2.png -resize 48x48 www/images/icon-48.png
+            convert ../public/images/web-logo2.png -resize 96x96 www/images/icon-96.png
+            convert ../public/images/web-logo2.png -resize 144x144 www/images/icon-144.png
+            convert ../public/images/web-logo2.png -resize 192x192 www/images/icon-192.png
+            
+            # Also create a simple icon.png
+            cp ../public/images/web-logo2.png www/images/icon.png
+          else
+            echo "Creating placeholder icons..."
+            mkdir -p www/images
+            # Create simple green placeholder
+            convert -size 72x72 xc:#4CAF50 www/images/web-logo2-72.png
+            convert -size 192x192 xc:#4CAF50 www/images/icon.png
+          fi
+          
+          echo "WWW directory contents:"
+          find www -type f | head -20
+
+      - name: Debug - Check config.xml
+        working-directory: ./android-wrapper
+        run: |
+          if [ -f "config.xml" ]; then
+            echo "=== config.xml ==="
+            cat config.xml
+          fi
+
+      - name: Build with Cordova (Simple approach)
+        working-directory: ./android-wrapper
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          # Clean any existing platform
+          rm -rf platforms/android plugins/cordova-* 2>/dev/null || true
+          
+          # Add Android platform with older, more stable version
+          cordova platform add android@11.0.0
+          
+          echo "=== Cordova requirements ==="
+          cordova requirements android 2>/dev/null || true
+          
+          echo "=== Building APK ==="
+          # Build without verbose to reduce noise
+          cordova build android --debug
+          
+          # Check for APK
+          if [ -f "platforms/android/app/build/outputs/apk/debug/app-debug.apk" ]; then
+            echo "✅ SUCCESS: APK created!"
+            ls -lh platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          else
+            echo "❌ APK not found at standard path"
+            echo "Searching for APK files..."
+            find . -name "*.apk" -type f
+            exit 1
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: ./android-wrapper/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error          mkdir -p $HOME/android-sdk/cmdline-tools
           mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
           
           # Add to PATH for current step
