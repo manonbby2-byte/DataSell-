@@ -1,74 +1,303 @@
-name: Build Cordova Android Production
+name: Cordova Android Build and Release
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual triggers
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
-
-    env:
-      JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
-      ANDROID_SDK_ROOT: $HOME/android-sdk
-      PATH: $HOME/gradle/gradle-7.5.1/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
-
+    
     steps:
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y tar unzip curl git openjdk-11-jdk
-
     - name: Checkout repository
       uses: actions/checkout@v3
-
+      with:
+        fetch-depth: 0  # Get all history for version comparison
+    
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '11'
+    
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
         node-version: '18'
-
-    - name: Install Cordova & Gradle
+        cache: 'npm'
+    
+    - name: Install Cordova CLI
       run: |
         npm install -g cordova
-        mkdir -p $HOME/gradle
-        curl -sSL https://services.gradle.org/distributions/gradle-7.5.1-bin.zip -o gradle-7.5.1-bin.zip
-        unzip -qq gradle-7.5.1-bin.zip -d $HOME/gradle
-
-    - name: Setup Android SDK
+    
+    - name: Install Android SDK
+      uses: android-actions/setup-android@v2
+    
+    - name: Set up Android SDK environment
       run: |
-        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-        curl -sSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o cmdline-tools.zip
-        unzip -qq cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-        yes | $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/bin/sdkmanager --licenses
-        $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/bin/sdkmanager "platform-tools" "platforms;android-32" "build-tools;32.0.0"
-
-    - name: Create Cordova project
+        echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+        echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/tools/bin:$PATH" >> $GITHUB_ENV
+        sdkmanager --version
+    
+    - name: Install required Android SDK components
       run: |
-        if [ ! -f config.xml ]; then
-          cordova create . com.datasell.app DataSellApp
+        yes | sdkmanager --licenses || true
+        sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+    
+    - name: Install project dependencies
+      run: |
+        npm install
+        cordova platform add android@14.0.1
+    
+    - name: Copy logo and bundle public folder
+      run: |
+        # Create images directory
+        mkdir -p www/images
+        
+        # Copy logo from parent directory (matching your build script)
+        if [ -f "../public/images/web-logo2.png" ]; then
+          cp "../public/images/web-logo2.png" "www/images/web-logo2.png"
+          echo "✓ Copied web-logo2.png"
+        elif [ -f "public/images/web-logo2.png" ]; then
+          cp "public/images/web-logo2.png" "www/images/web-logo2.png"
+          echo "✓ Copied web-logo2.png from current directory"
+        else
+          echo "⚠ Warning: Logo not found, using placeholder"
+          # Create a simple placeholder
+          convert -size 1024x1024 xc:#4A90E2 -pointsize 100 -fill white -gravity center -draw "text 0,0 'DS'" www/images/web-logo2.png || echo "Placeholder creation failed"
         fi
-
-    - name: Add Android platform
+        
+        # Copy public folder into www/app (matching your build script)
+        if [ -d "../public" ]; then
+          echo "Copying public folder to www/app..."
+          rm -rf www/app
+          mkdir -p www/app
+          cp -r ../public/. www/app/
+          echo "✓ Public folder copied"
+        elif [ -d "public" ]; then
+          echo "Copying public folder from current directory..."
+          rm -rf www/app
+          mkdir -p www/app
+          cp -r public/. www/app/
+          echo "✓ Public folder copied"
+        fi
+    
+    - name: Build Debug APK
       run: |
-        cordova platform remove android || true
-        cordova platform add android@10.1.1
-
-    - name: Decode Keystore
+        cordova build android --debug \
+          -- --no-daemon \
+          -Dorg.gradle.jvmargs="-Xmx1200m -Dfile.encoding=UTF-8"
+        echo "Debug APK built"
+    
+    - name: Copy debug APK for distribution
       run: |
-        echo ${{ secrets.KEYSTORE_BASE64 }} | base64 --decode > my-release-key.jks
-
+        mkdir -p dist/debug
+        APK_PATH="platforms/android/app/build/outputs/apk/debug/app-debug.apk"
+        
+        if [ -f "$APK_PATH" ]; then
+          cp "$APK_PATH" "dist/debug/datasell-debug.apk"
+          echo "Debug APK copied to dist/debug/"
+          
+          # Get APK info
+          APK_SIZE=$(stat -c%s "$APK_PATH")
+          APK_SIZE_MB=$(echo "scale=2; $APK_SIZE / 1048576" | bc)
+          echo "Debug APK size: ${APK_SIZE_MB} MB"
+          echo "apk_size_mb=${APK_SIZE_MB}" >> $GITHUB_ENV
+        else
+          echo "❌ Debug APK not found at: $APK_PATH"
+          ls -la platforms/android/app/build/outputs/apk/debug/ || true
+        fi
+    
+    - name: Prepare keystore for signing
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+      run: |
+        if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+          echo "🔐 Setting up keystore for release signing..."
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android-release.keystore
+          
+          # Create keystore properties file from secrets
+          cat > keystore.properties << EOF
+          storeFile=android-release.keystore
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+          
+          echo "✓ Keystore setup complete"
+        else
+          echo "⚠ No keystore secret found. Release builds will be unsigned."
+        fi
+    
     - name: Build Release APK
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
       run: |
-        cordova build android --release --no-telemetry
-
-    - name: Sign and Align APK
+        if [ -f "keystore.properties" ]; then
+          echo "🔨 Building release APK with signing..."
+          cordova build android --release \
+            -- --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx1200m -Dfile.encoding=UTF-8"
+          
+          RELEASE_APK="platforms/android/app/build/outputs/apk/release/app-release.apk"
+          SIGNED_APK="platforms/android/app/build/outputs/apk/release/app-release-signed.apk"
+          
+          if [ -f "$RELEASE_APK" ]; then
+            echo "✓ Release APK built successfully"
+            
+            # Sign the APK
+            jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+              -keystore android-release.keystore \
+              -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+              -keypass "${{ secrets.ANDROID_KEY_PASSWORD }}" \
+              "$RELEASE_APK" "${{ secrets.ANDROID_KEY_ALIAS }}"
+            
+            # Align with zipalign
+            $ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign -v 4 "$RELEASE_APK" "$SIGNED_APK"
+            
+            # Verify alignment
+            $ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign -c 4 "$SIGNED_APK"
+            
+            echo "✓ APK signed and aligned"
+            
+            # Copy to dist folder
+            mkdir -p dist/release
+            cp "$SIGNED_APK" "dist/release/datasell-release-${{ github.sha }}.apk"
+            
+            # Get APK info
+            APK_SIZE=$(stat -c%s "$SIGNED_APK")
+            APK_SIZE_MB=$(echo "scale=2; $APK_SIZE / 1048576" | bc)
+            echo "apk_size_mb=${APK_SIZE_MB}" >> $GITHUB_ENV
+            echo "apk_path=$SIGNED_APK" >> $GITHUB_ENV
+            
+          else
+            echo "❌ Release APK not found at: $RELEASE_APK"
+            exit 1
+          fi
+        else
+          echo "⚠ Skipping release build (no keystore)"
+        fi
+    
+    - name: Upload debug APK as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: debug-apk
+        path: dist/debug/
+        if-no-files-found: error
+    
+    - name: Upload release APK as artifact
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-apk
+        path: dist/release/
+        if-no-files-found: ignore
+    
+    - name: Extract version info from config.xml
+      id: version-info
       run: |
-        APK_PATH=$(find platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-        jarsigner -verbose -keystore my-release-key.jks -storepass ${{ secrets.KEYSTORE_PASSWORD }} -keypass ${{ secrets.KEY_PASSWORD }} $APK_PATH ${{ secrets.KEY_ALIAS }}
-        zipalign -v 4 $APK_PATH ${APK_PATH%.apk}-signed.apk
-
-    - name: List APK outputs
+        VERSION=$(grep -o 'version="[^"]*"' config.xml | head -1 | sed 's/version="//;s/"//')
+        APP_NAME=$(grep -o '<name>[^<]*</name>' config.xml | head -1 | sed 's/<name>//;s/<\/name>//')
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+        echo "build_date=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+        
+        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+        echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+        echo "tag_name=v${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+        echo "release_name=${APP_NAME} v${VERSION} (${SHORT_SHA})" >> $GITHUB_OUTPUT
+    
+    - name: Generate release notes
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      id: release-notes
       run: |
-        ls -R platforms/android/app/build/outputs/apk/
+        # Get latest tag
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        
+        if [ -z "$LATEST_TAG" ]; then
+          CHANGES="Initial release"
+        else
+          # Get commits since last tag
+          CHANGES=$(git log --pretty=format:"- %s (%h)" "${LATEST_TAG}"..HEAD --no-merges)
+          if [ -z "$CHANGES" ]; then
+            CHANGES="No significant changes"
+          fi
+        fi
+        
+        # Create release body
+        RELEASE_BODY=$(cat << EOF
+        ### 🚀 What's New
+        
+        ${CHANGES}
+        
+        ### 📱 Build Details
+        - **App**: ${{ steps.version-info.outputs.app_name }}
+        - **Version**: ${{ steps.version-info.outputs.version }}
+        - **Build**: ${{ steps.version-info.outputs.short_sha }}
+        - **Date**: ${{ steps.version-info.outputs.build_date }}
+        - **Cordova**: $(cordova --version)
+        - **Android SDK**: 34
+        
+        ### 📦 APK Downloads
+        - **Release APK**: Signed and aligned for Google Play
+        - **Debug APK**: For testing only
+        
+        ### 🔐 Security
+        - APK is signed with release keystore
+        - SHA-256 with RSA signing
+        - Zipalign optimized
+        
+        ---
+        
+        *Built automatically with GitHub Actions*
+        EOF
+        )
+        
+        # Escape newlines for GitHub Actions
+        RELEASE_BODY="${RELEASE_BODY//$'\n'/'%0A'}"
+        RELEASE_BODY="${RELEASE_BODY//$'\r'/'%0D'}"
+        
+        echo "release_body=${RELEASE_BODY}" >> $GITHUB_OUTPUT
+    
+    - name: Create GitHub Release
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.version-info.outputs.tag_name }}
+        name: ${{ steps.version-info.outputs.release_name }}
+        body: ${{ steps.release-notes.outputs.release_body }}
+        prerelease: false
+        draft: false
+        files: |
+          dist/release/*.apk
+          dist/debug/*.apk
+        generate_release_notes: true
+    
+    - name: Tagged Release (for version tags)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        name: ${{ steps.version-info.outputs.app_name }} ${{ github.ref_name }}
+        body: |
+          ### 🏷️ Tagged Release: ${{ github.ref_name }}
+          
+          **Version**: ${{ steps.version-info.outputs.version }}
+          **Commit**: ${{ steps.version-info.outputs.short_sha }}
+          **Build Date**: ${{ steps.version-info.outputs.build_date }}
+          
+          ### 📦 APK Downloads
+          - Release APK: Signed and ready for distribution
+          - Debug APK: For testing purposes
+          
+          ---
+          *Production release built with GitHub Actions*
+        files: |
+          dist/release/*.apk
+          dist/debug/*.apk
