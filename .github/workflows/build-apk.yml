@@ -18,11 +18,11 @@ jobs:
       with:
         fetch-depth: 0  # Get all history for version comparison
     
-    - name: Setup Java
+    - name: Setup Java 17 (required for Android SDK)
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
-        java-version: '11'
+        java-version: '17'
     
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -34,22 +34,39 @@ jobs:
       run: |
         npm install -g cordova
     
-    - name: Install Android SDK
-      uses: android-actions/setup-android@v3
-    
-    - name: Set up Android SDK environment
+    - name: Install Android SDK (manual setup)
       run: |
-        echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-        echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/tools/bin:$PATH" >> $GITHUB_ENV
+        # Create Android SDK directory
+        mkdir -p /usr/local/lib/android/sdk
         
+        # Download and extract Android Command Line Tools
+        # Using version 9.0 which is compatible with Java 11
+        cd /tmp
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+        mkdir -p /usr/local/lib/android/sdk/cmdline-tools
+        unzip -q cmdline-tools.zip -d /usr/local/lib/android/sdk/cmdline-tools
+        mv /usr/local/lib/android/sdk/cmdline-tools/cmdline-tools /usr/local/lib/android/sdk/cmdline-tools/latest
+        
+        # Set environment variables
+        echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+        echo "PATH=/usr/local/lib/android/sdk/cmdline-tools/latest/bin:/usr/local/lib/android/sdk/platform-tools:$PATH" >> $GITHUB_ENV
+        
+        # Verify installation
+        ls -la /usr/local/lib/android/sdk/cmdline-tools/latest/bin/
+    
     - name: Accept Android licenses
       run: |
         yes | sdkmanager --licenses || true
     
     - name: Install Android build tools
       run: |
-        sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+        # Install required packages (Android 13/API 33 is required for Cordova Android 14)
+        sdkmanager "platform-tools"
+        sdkmanager "platforms;android-33"
+        sdkmanager "build-tools;33.0.0"
+        sdkmanager "platforms;android-34"
+        sdkmanager "build-tools;34.0.0"
     
     - name: Install project dependencies
       run: |
@@ -272,14 +289,6 @@ jobs:
         
         # Save to file for GitHub Actions
         echo "$RELEASE_BODY" > release_body.md
-        
-        # Escape for output
-        RELEASE_BODY_ESCAPED="${RELEASE_BODY//$'\n'/'%0A'}"
-        RELEASE_BODY_ESCAPED="${RELEASE_BODY_ESCAPED//$'\r'/'%0D'}"
-        
-        echo "body<<EOF" >> $GITHUB_OUTPUT
-        echo "$RELEASE_BODY" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
     
     - name: Create GitHub Release
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
