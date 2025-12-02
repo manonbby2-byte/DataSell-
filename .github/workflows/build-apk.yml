@@ -16,7 +16,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Get all history for version comparison
+        fetch-depth: 0
+        path: 'wrapper'  # Checkout into wrapper directory
     
     - name: Setup Java 17 (required for Android SDK)
       uses: actions/setup-java@v4
@@ -29,10 +30,17 @@ jobs:
       with:
         node-version: '18'
         cache: 'npm'
+        cache-dependency-path: 'wrapper/package.json'
     
     - name: Install Cordova CLI
       run: |
         npm install -g cordova
+    
+    - name: Change to wrapper directory
+      run: |
+        cd wrapper
+        pwd
+        ls -la
     
     - name: Install Android SDK (manual setup)
       run: |
@@ -70,8 +78,36 @@ jobs:
     
     - name: Install project dependencies
       run: |
+        cd wrapper
         npm install
-        cordova platform add android@14.0.1
+        # Initialize Cordova project if not already initialized
+        if [ ! -d "platforms" ]; then
+          echo "Initializing Cordova project..."
+          # Check if config.xml exists (it should from your repo)
+          if [ -f "config.xml" ]; then
+            # Create a minimal package.json if missing
+            if [ ! -f "package.json" ]; then
+              cat > package.json << EOF
+              {
+                "name": "com.datasell.app",
+                "version": "1.0.0",
+                "description": "DataSell App",
+                "main": "index.js",
+                "scripts": {
+                  "test": "echo \"Error: no test specified\" && exit 1"
+                },
+                "author": "",
+                "license": "ISC"
+              }
+              EOF
+            fi
+            # Add android platform
+            cordova platform add android@14.0.1
+          else
+            echo "Error: config.xml not found in wrapper directory"
+            exit 1
+          fi
+        fi
     
     - name: Install ImageMagick for logo processing
       run: |
@@ -80,6 +116,8 @@ jobs:
     
     - name: Copy logo and bundle public folder
       run: |
+        cd wrapper
+        
         # Create images directory
         mkdir -p www/images
         
@@ -87,9 +125,9 @@ jobs:
         if [ -f "../public/images/web-logo2.png" ]; then
           cp "../public/images/web-logo2.png" "www/images/web-logo2.png"
           echo "✓ Copied web-logo2.png"
-        elif [ -f "public/images/web-logo2.png" ]; then
-          cp "public/images/web-logo2.png" "www/images/web-logo2.png"
-          echo "✓ Copied web-logo2.png from current directory"
+        elif [ -f "../../public/images/web-logo2.png" ]; then
+          cp "../../public/images/web-logo2.png" "www/images/web-logo2.png"
+          echo "✓ Copied web-logo2.png from parent directory"
         else
           echo "⚠ Warning: Logo not found, using placeholder"
           # Create a simple placeholder using ImageMagick
@@ -103,11 +141,11 @@ jobs:
           mkdir -p www/app
           cp -r ../public/. www/app/
           echo "✓ Public folder copied"
-        elif [ -d "public" ]; then
-          echo "Copying public folder from current directory..."
+        elif [ -d "../../public" ]; then
+          echo "Copying public folder from parent directory..."
           rm -rf www/app
           mkdir -p www/app
-          cp -r public/. www/app/
+          cp -r ../../public/. www/app/
           echo "✓ Public folder copied"
         fi
         
@@ -117,6 +155,7 @@ jobs:
     
     - name: Build Debug APK
       run: |
+        cd wrapper
         cordova build android --debug \
           -- --no-daemon \
           -Dorg.gradle.jvmargs="-Xmx1200m -Dfile.encoding=UTF-8"
@@ -124,6 +163,7 @@ jobs:
     
     - name: Copy debug APK for distribution
       run: |
+        cd wrapper
         mkdir -p dist/debug
         APK_PATH="platforms/android/app/build/outputs/apk/debug/app-debug.apk"
         
@@ -136,6 +176,10 @@ jobs:
           APK_SIZE_MB=$(echo "scale=2; $APK_SIZE / 1048576" | bc)
           echo "Debug APK size: ${APK_SIZE_MB} MB"
           echo "debug_apk_size_mb=${APK_SIZE_MB}" >> $GITHUB_ENV
+          
+          # Copy APK to root directory for easier access
+          mkdir -p ../../dist/debug
+          cp "$APK_PATH" "../../dist/debug/datasell-debug.apk"
         else
           echo "❌ Debug APK not found at: $APK_PATH"
           echo "Checking directory contents:"
@@ -145,6 +189,7 @@ jobs:
     - name: Prepare keystore for signing
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
       run: |
+        cd wrapper
         if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
           echo "🔐 Setting up keystore for release signing..."
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android-release.keystore
@@ -165,6 +210,7 @@ jobs:
     - name: Build Release APK
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
       run: |
+        cd wrapper
         if [ -f "keystore.properties" ]; then
           echo "🔨 Building release APK with signing..."
           cordova build android --release \
@@ -199,7 +245,10 @@ jobs:
             APK_SIZE=$(stat -c%s "$SIGNED_APK")
             APK_SIZE_MB=$(echo "scale=2; $APK_SIZE / 1048576" | bc)
             echo "release_apk_size_mb=${APK_SIZE_MB}" >> $GITHUB_ENV
-            echo "apk_path=$SIGNED_APK" >> $GITHUB_ENV
+            
+            # Copy APK to root directory for easier access
+            mkdir -p ../../dist/release
+            cp "$SIGNED_APK" "../../dist/release/datasell-release-${{ github.sha }}.apk"
             
           else
             echo "❌ Release APK not found at: $RELEASE_APK"
@@ -229,6 +278,7 @@ jobs:
     - name: Extract version info from config.xml
       id: version-info
       run: |
+        cd wrapper
         VERSION=$(grep -o 'version="[^"]*"' config.xml | head -1 | sed 's/version="//;s/"//' || echo "1.0.0")
         APP_NAME=$(grep -o '<name>[^<]*</name>' config.xml | head -1 | sed 's/<name>//;s/<\/name>//' || echo "DataSellApp")
         
@@ -269,7 +319,7 @@ jobs:
         - **Version**: ${{ steps.version-info.outputs.version }}
         - **Build**: ${{ steps.version-info.outputs.short_sha }}
         - **Date**: ${{ steps.version-info.outputs.build_date }}
-        - **Cordova**: $(cordova --version)
+        - **Cordova**: $(cd wrapper && cordova --version)
         - **Android SDK**: 34
         
         ### 📦 APK Downloads
